@@ -37,7 +37,7 @@ s = tic;
 names{1} = 'RFF-PSR-joint-refine';
 names{2} = 'RFF-PSR-joint';
 rng(0);
-[ref_rffpsr, rffpsr] = train_rffpsr(X_tr, U_tr, fut, past, {}, options);
+[ref_rffpsr, rffpsr] = train_rffpsr(X_tr, U_tr, fut, past, options);
 psr{1} = ref_rffpsr; runtimes{1} = toc(s);
 psr{2} = rffpsr; runtimes{2} = toc(s);
 
@@ -54,7 +54,7 @@ s = tic;
 names{3} = 'RFF-PSR-cond-refine';
 names{4} = 'RFF-PSR-cond';
 rng(0);
-[ref_rffpsr, rffpsr] = train_rffpsr(X_tr, U_tr, fut, past, {}, options);
+[ref_rffpsr, rffpsr] = train_rffpsr(X_tr, U_tr, fut, past, options);
 psr{3} = ref_rffpsr; runtimes{3} = toc(s);
 psr{4} = rffpsr; runtimes{4} = toc(s); 
 

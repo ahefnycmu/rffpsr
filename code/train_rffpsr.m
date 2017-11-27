@@ -1,5 +1,5 @@
 function [psr, non_refined_psr] = train_rffpsr(obs, act, ...
-    future_win, past_win, prediction_tasks, options)
+    future_win, past_win, options)
 %TRAIN_RFFPSR - Trains an HSE-PSR using random fourier features.
 %This function uses 2 stage regression for initialization followed by 
 % backpropagation through time. The 2 stage regression works as follows:
@@ -11,10 +11,19 @@ function [psr, non_refined_psr] = train_rffpsr(obs, act, ...
 %                        |-> (oo | a) 
 %This function assumes a blind policy.
 %
-% 
+%Parameters:
+%  obs :    A cell array of observation trajectories. Each trajectory is a 
+%           dxT matrix, where d is obs dimension and T is trajectory
+%           length.
+%  act :    A cell array of action trajectories. Each trajectory is a dxT
+%           matrix, where d is act dimension and T is trajectory length.
+%  future_win:  Future length
+%  past_win:    History length
+%  options:     Optional parameters structure. See below for details on
+%               optional parameters and default values.
 
     % Default Parameters    
-    if nargin < 6 || isempty(options); options = struct; end    
+    if nargin < 5 || isempty(options); options = struct; end    
     if ~isfield(options, 'reg_maxit'); options.reg_maxit = 1000; end % Max. iterations for regression optimization algorithms
     if ~isfield(options, 'D'); options.D = 1000; end % Number of RFF feature pairs
     if ~isfield(options, 'p'); options.p = 50; end % Projection dimension
@@ -365,7 +374,7 @@ function [psr, non_refined_psr] = train_rffpsr(obs, act, ...
     %% Build Model
     if options.refine > 0
         non_refined_psr = build_model(future_win, states, all, W, U, d, K, feat, prj_feat, ...
-            prediction_tasks, lambda, reg_options);
+            lambda, reg_options);
     
         W.s2_h = non_refined_psr.W_.s2_h; 
     end            
@@ -535,7 +544,7 @@ function [psr, non_refined_psr] = train_rffpsr(obs, act, ...
     states = filter_trajs(series_index, states, all, W, U, K, lambda);
     
     psr = build_model(future_win, states, all, W, U, d, K, feat, prj_feat, ...
-        prediction_tasks, lambda, reg_options);
+        lambda, reg_options);
     
     if options.refine == 0
         non_refined_psr = psr;
@@ -543,34 +552,17 @@ function [psr, non_refined_psr] = train_rffpsr(obs, act, ...
 end
 
 function val_err = validation_error(val_states, val_all, W, K, U)
-    % Extneded State Error
-%    val_rf_ex_in = kr_product(val_states, val_all.extest_a_feat);
-%    val_rf_ex_out = val_all.extest_o_feat;                
-%    val_err = norm(val_rf_ex_out - reshape(W.s2_ex, [], K.s * K.ta) * val_rf_ex_in, 'fro');                
-    
-    % Obs Covariance Error
-%     val_rf_oo_in = kr_product(val_states, val_all.act_feat);
-%     val_rf_oo_out = val_all.oo_feat;        
-%     val_err = norm(val_rf_oo_out - reshape(W.s2_oo, [], K.s * K.a) * val_rf_oo_in, 'fro');                    
-    
-    % Obs Error
-%     val_rf_o_in = kr_product(val_states, val_all.act_feat);
-%     val_rf_o_out = val_all.obs;        
-%     val_err = norm(val_rf_o_out - W.s2_obs * val_rf_o_in, 'fro'); 
-
     % Horizon Error
     val_rf_to_in = kr_product(val_states, val_all.test_a_feat);
     val_rf_to_out = val_all.test_o;        
     val_err = norm(val_rf_to_out - W.s2_h * val_rf_to_in, 'fro');
 end
 
-function psr = build_model(future_win, states, all, W, U, d, K, feat, prj_feat, ...
-    prediction_tasks, lambda, reg_options)    
+function psr = build_model(future_win, states, all, W, U, d, K, feat, prj_feat, lambda, reg_options)    
     %% Additional Predictors    
     disp('S2 Regression - Horizon Prediction');
     tic;
-    s2_h_in = kr_product(states, all.test_a_feat);
-    %s2_h_out = all.test_o;
+    s2_h_in = kr_product(states, all.test_a_feat);    
     s2_h_out = all.test_o_feat;
     W.s2_h = ridge_regression(s2_h_in, s2_h_out, lambda);
     W.rff2obs_test = ridge_regression(all.test_o_feat, all.test_o, lambda);    
@@ -578,39 +570,16 @@ function psr = build_model(future_win, states, all, W, U, d, K, feat, prj_feat, 
     
     disp('S2 Regression - Additional 1-step Predictors');
     tic;
-    s2_1s_in = kr_product(states, all.act_feat);        
-    %s2_out_obs = all.obs;
+    s2_1s_in = kr_product(states, all.act_feat);            
     s2_out_obs = all.obs_feat;
-        
-    num_tasks = length(prediction_tasks);
-    W.s2_tsk = cell(1,num_tasks); 
-    task_out = cell(1,num_tasks);
-    task_dim = cell(1,num_tasks);
-
-    for task = 1:num_tasks   
-        task_out{task} = flatten_features( ...
-            prediction_tasks{task}, @(x,t) x(t), range);        
-        task_dim{task} = size(task_out{task}, 1);        
-    end
-
-    s2_1s_out = [s2_out_obs; cat(1,task_out{:})];
+                
+    s2_1s_out = s2_out_obs;
     W.s2_1s = ridge_regression(s2_1s_in, s2_1s_out, lambda);
 
-    idx=0;             
-    %W.s2_rffobs = W.s2_1s(idx+1:idx+K.o,:);
+    idx=0;                 
     W.s2_rffobs = W.oo2rffobs * reshape(W.s2_oo, K.oo, []);
     idx=idx+K.o;
-    %W.s2_obs = reshape(W.s2_obs, [], K.s);
     
-    %W.rff2obs = ridge_regression(all.obs_feat, all.obs, lambda);    
-    %W.s2_obs = W.rff2obs * W.s2_obs;
-
-    for task = 1:num_tasks
-        W.s2_tsk{task} = W.s2_1s(idx+1:idx+task_dim{task},:);  
-        idx = idx + size(W.s2_tsk{task}, 1);
-        W.s2_tsk{task} = reshape(W.s2_tsk{task}, [], K.s);        
-    end
-
     assert(idx == size(W.s2_1s,1));
     toc;                
             
@@ -633,26 +602,19 @@ function psr = build_model(future_win, states, all, W, U, d, K, feat, prj_feat, 
     psr.lambda_ = lambda;
     
     % Public data memebers
-    psr.num_tasks = num_tasks;
-    psr.task_dim = task_dim;
     psr.future_win = future_win;
     psr.f0 = mean(states,2);
             
     % Filtering/Prediction function handles
     psr.state_from_finite_history = @state_from_finite_history;
     psr.filter = @hsepsr_filter;
-    psr.predict = @rffpsr_predict;
-    psr.predict_task = @rffpsr_predict_task;
+    psr.predict = @rffpsr_predict;    
     psr.test = @rffpsr_test;
     
     % Test filtering and prediction functions
     psr.filter(psr, psr.f0, all.obs(:,1), all.act(:,1));
     psr.predict(psr, psr.f0, all.act(:,1));
-    psr.test(psr, psr.f0, reshape(all.test_a(:,1), d.a, future_win));
-    
-    for task = 1:num_tasks 
-        psr.predict_task(psr, psr.f0, all.act(:,1), task);
-    end 
+    psr.test(psr, psr.f0, reshape(all.test_a(:,1), d.a, future_win));    
 end
 
 function s = state_from_finite_history(psr, past_o, past_a)
@@ -670,30 +632,11 @@ function o = rffpsr_predict(psr, f, a)
     o = psr.W_.s2_obs * kron(f, a_rff);
 end
 
-function o = rffpsr_predict_task(psr, f, a, task_id)
-    a_rff = psr.prj_feat_.a(a);
-    o = reshape(psr.W_.s2_tsk{task_id} * f, [], psr.K_.a) * a_rff;
-end
-
 function o = rffpsr_test(psr, f, a)
     a = reshape(a,[],1);
     a_rff = psr.prj_feat_.ta(a); 
     o = psr.W_.s2_h * rowkron(f', a_rff')';
-    o = reshape(o, [], psr.future_win);    
-    
-    %state = reshape(psr.U_.st * f, [], length(a_rff));
-    %o = psr.W_.rff2obs * (state * a_rff);
-    %o = reshape(o, psr.d_.o, []);
-            
-%     o = zeros(psr.d_.o, psr.future_win);
-%     
-%     for i=1:psr.future_win
-%         a_rff = psr.prj_feat_.a(a(:,i)); 
-%         o_rff = psr.W_.s2_rffobs * kron(f,a_rff);      
-%         o(:,i) = psr.W_.rff2obs * o_rff;        
-%         
-%         f = rffpsr_filter_core(f, o_rff, a_rff, psr.W_, psr.U_, psr.K_, psr.lambda_);
-%     end
+    o = reshape(o, [], psr.future_win);        
 end
 
 function [sf,v,C_oo_prj,C_eto_ta,A,B] = rffpsr_filter_core(f, o_feat, a_feat, W, U, K, lambda)        
@@ -729,13 +672,7 @@ function [g_f,g_Wex, g_Woo] = rffpsr_backprop(g_sf, f, o_feat, a_feat, W, U, K, 
         g_Usf = g_sf * U.st';
         Q = reshape(g_Usf', K.to, [])' * A;
         g_Cex = reshape(Q' * B', 1, K.eto*K.eta);
-        
-        %g_Cex = reshape(g_Usf', K.to, [])' * A;        
-        %BB = repmat(reshape(B', 1, []), K.eto, 1);
-        %BB = reshape(BB, K.eta*K.eto, K.ta)'; % BB = kron(B, ones(1, K.eto));                                
-        %g_Cex = repmat(g_Cex, 1, K.eta) .* BB;
-        %g_Cex = sum(g_Cex);                    
-        
+                        
         g_Wex = rowkron(f', g_Cex);          
         g_f1 = g_Cex * W.s2_ex;
         
@@ -745,14 +682,7 @@ function [g_f,g_Wex, g_Woo] = rffpsr_backprop(g_sf, f, o_feat, a_feat, W, U, K, 
         C_oo = reshape(U.oo * C_oo_prj, K.o, K.o);        
         C_oo2 = C_oo * C_oo;
         C_oo2(1:K.o+1:end) = C_oo2(1:K.o+1:end) + lambda;
-        
-        % iC_oo = inv(C_oo2);        
-        % g_v_Coo_1 = -kron(v',C_oo2\C_oo);
-        % g_v_Coo_2 = -kron((C_oo*v)',iC_oo);
-        % g_v_Coo_3 = kron(o_feat',iC_oo);
-        % g_v_Coo = g_v_Coo_1+g_v_Coo_2+g_v_Coo_3;
-        % g_Cooprj = g_v * g_v_Coo * U.oo;                
-        
+                               
         gviCoo2 = g_v / C_oo2;
         g_Cooprj_1 = -rowkron(v',gviCoo2 * C_oo);
         g_Cooprj_2 = -rowkron((C_oo*v)', gviCoo2);
@@ -806,14 +736,7 @@ function [g_Wex, g_Woo, g_Wh] = bp_traj(states, v_all, C_oo_prj_all, ...
     g_Woo = zeros(1,K.s*K.oo*K.a);
     g_Wh = zeros(1,K.s*d_to*K.ta);
     g_sf = zeros(1,K.s);
-    
-    if isa(states, 'gpuArray')
-        g_Wex = def_gpuArray(g_Wex);
-        g_Woo = def_gpuArray(g_Woo);
-        g_Wh = def_gpuArray(g_Wh);
-        g_sf = def_gpuArray(g_sf);
-    end
-    
+        
     a_k_d = kr_product(traj.ta_feat, diff_all);
     
     for i=n-1:-1:1                  
@@ -835,13 +758,7 @@ function [g_Wex, g_Woo, g_Wh] = bp_traj(states, v_all, C_oo_prj_all, ...
             W, U, K, lambda, v, C_oo_prj, C_eto_ta, A, B);
 
         g_Woo = g_Woo + gj_Woo;
-        g_Wex = g_Wex + gj_Wex;  
-        
-%         max_gsf_norm = 10.0;
-%         gsf_norm = sqrt(norm(g_sf, 'fro'));
-%         if (gsf_norm > max_gsf_norm)
-%             g_sf = (g_sf / gsf_norm) * max_gsf_norm;            
-%         end
+        g_Wex = g_Wex + gj_Wex;          
     end
         
     g_Woo = (reshape(g_Woo, K.oo*K.a, K.s) + lambda * W.s2_oo) / (n-1);
@@ -861,10 +778,10 @@ function [g_Wex, g_Woo, g_Wh] = bp_traj(states, v_all, C_oo_prj_all, ...
 end
 
 function [states,v_all,C_oo_prj_all,C_eto_ta_all,A_all,B_all] = filter_trajs(series_index, states0, all, W, U, K, lambda, bp_inputs)                
-    if nargin < 8; bp_inputs = 0; end;    
+    if nargin < 8; bp_inputs = 0; end    
     num_traj = max(series_index);
     states = zeros(size(states0));
-    if isa(states0, 'gpuArray'); states = def_gpuArray(states); end;
+    if isa(states0, 'gpuArray'); states = def_gpuArray(states); end
     n = size(states, 2);
     
     if bp_inputs
