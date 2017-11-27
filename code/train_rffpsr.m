@@ -2,14 +2,15 @@ function [psr, non_refined_psr] = train_rffpsr(obs, act, ...
     future_win, past_win, options)
 %TRAIN_RFFPSR - Trains an HSE-PSR using random fourier features.
 %This function uses 2 stage regression for initialization followed by 
-% backpropagation through time. The 2 stage regression works as follows:
-%where:
+% backpropagation through time (BPTT) refinement.
+%
+%The 2 stage regression works as follows:
 % -S1A: history --> (fut_o | fut_a)
 % -S1B: history -----> (ext_fut_o | ext_fut_a)
 %                  |-> (oo | a)                  
 % -S2: (fut_o | fut_a) ----> (ext_fut_o | ext_fut_a)
 %                        |-> (oo | a) 
-%This function assumes a blind policy.
+%This function assumes the data is collected using a blind policy.
 %
 %Parameters:
 %  obs :    A cell array of observation trajectories. Each trajectory is a 
@@ -21,6 +22,9 @@ function [psr, non_refined_psr] = train_rffpsr(obs, act, ...
 %  past_win:    History length
 %  options:     Optional parameters structure. See below for details on
 %               optional parameters and default values.
+%
+%Returns:
+% PSR after and before BPTT refinement.
 
     % Default Parameters    
     if nargin < 5 || isempty(options); options = struct; end    
